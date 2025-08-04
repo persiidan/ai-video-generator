@@ -779,38 +779,34 @@ export class VideoComposer {
       console.log(`📝 Chunk ${index + 1}: "${chunk.text}" (${chunk.startTime}s - ${chunk.endTime}s)`);
     });
     
-    // Use a simple approach without custom fonts to avoid FFmpeg crashes
-    console.log('🎬 Using basic drawtext filter without custom fonts');
+    // Use a simple approach with basic text overlay
+    console.log('🎬 Using basic text overlay without complex drawtext filters');
     
-    // Create multiple drawtext filters with timing constraints
-    const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
-      // Write text to a file to avoid escaping issues
-      const textFileName = `text_${Date.now()}_${index}.txt`;
-      await this.ffmpeg!.writeFile(textFileName, chunk.text);
-      
-      // Adjust font size and positioning based on video orientation
-      let fontSize, yPosition;
-      if (dimensions.height > dimensions.width) {
-        // Portrait: smaller font, positioned higher for better spacing
-        fontSize = 72;
-        yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
-      } else {
-        // Landscape: larger font, centered
-        fontSize = 110;
-        yPosition = (dimensions.height - 110) / 2;
-      }
-      
-      // Use basic drawtext filter without fontfile parameter
-      return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
-    }));
+    // For now, let's create a simple text overlay that appears for the entire duration
+    // This avoids the complex timing issues with drawtext filters
+    const textFileName = `simple_text_${Date.now()}.txt`;
+    const fullText = chunks.map(chunk => chunk.text).join(' ');
+    await this.ffmpeg!.writeFile(textFileName, fullText);
     
-    // Join all filters with commas
-    const combinedFilter = drawtextFilters.join(',');
+    // Adjust font size and positioning based on video orientation
+    let fontSize, yPosition;
+    if (dimensions.height > dimensions.width) {
+      // Portrait: smaller font, positioned higher for better spacing
+      fontSize = 72;
+      yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
+    } else {
+      // Landscape: larger font, centered
+      fontSize = 110;
+      yPosition = (dimensions.height - 110) / 2;
+    }
     
-    console.log(`🎬 Created ${drawtextFilters.length} timed drawtext filters`);
-    console.log(`🎬 Combined filter: ${combinedFilter}`);
+    // Use a simple drawtext filter that appears for the entire video duration
+    const simpleFilter = `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}`;
     
-    return combinedFilter;
+    console.log(`🎬 Created simple text overlay filter`);
+    console.log(`🎬 Filter: ${simpleFilter}`);
+    
+    return simpleFilter;
   }
 
   /**
