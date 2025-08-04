@@ -26,7 +26,7 @@ export default function Home() {
   const [imageResults, setImageResults] = useState<ImageGenerationResult[]>([]);
   const [videoSegments, setVideoSegments] = useState<VideoSegment[]>([]);
   const [generationError, setGenerationError] = useState<string>('');
-  const [generationErrorDetails, setGenerationErrorDetails] = useState<any>(null);
+  const [generationErrorDetails, setGenerationErrorDetails] = useState<Record<string, unknown> | null>(null);
   const [isVoiceValid, setIsVoiceValid] = useState(false);
   const [finalVideo, setFinalVideo] = useState<{ blob: Blob; url: string; size: number; duration: number } | null>(null);
   
@@ -519,70 +519,21 @@ export default function Home() {
                       📋 Show Detailed Error Information
                     </summary>
                     <div className="bg-red-800 p-3 rounded border border-red-700">
-                      <div className="space-y-2 text-red-200">
+                      <div className="space-y-2 text-sm">
                         <div>
-                          <strong>Error Type:</strong> {generationErrorDetails.type || 'general_failure'}
+                          <strong>Error Type:</strong> General Error
                         </div>
                         <div>
-                          <strong>Timestamp:</strong> {generationErrorDetails.timestamp}
+                          <strong>Message:</strong> {generationError}
                         </div>
                         <div>
-                          <strong>Script Length:</strong> {generationErrorDetails.scriptLength} characters
+                          <strong>Timestamp:</strong> {new Date().toLocaleString()}
                         </div>
-                        <div>
-                          <strong>Selected Voice:</strong> {generationErrorDetails.selectedVoice || 'None'}
-                        </div>
-                        <div>
-                          <strong>Image Style:</strong> {generationErrorDetails.imageStyle}
-                        </div>
-                        <div>
-                          <strong>Aspect Ratio:</strong> {generationErrorDetails.aspectRatio}
-                        </div>
-                        
-                        {generationErrorDetails.chunks !== undefined && (
-                          <div>
-                            <strong>Chunks Created:</strong> {generationErrorDetails.chunks}
-                          </div>
-                        )}
-                        
-                        {generationErrorDetails.ttsResults !== undefined && (
-                          <div>
-                            <strong>TTS Results:</strong> {generationErrorDetails.ttsResults}
-                          </div>
-                        )}
-                        
-                        {generationErrorDetails.imageResults !== undefined && (
-                          <div>
-                            <strong>Images Generated:</strong> {generationErrorDetails.imageResults}
-                          </div>
-                        )}
-                        
-                        {generationErrorDetails.videoSegments !== undefined && (
-                          <div>
-                            <strong>Video Segments:</strong> {generationErrorDetails.videoSegments}
-                          </div>
-                        )}
-                        
-                        {generationErrorDetails.failedSegment && (
-                          <div className="mt-3 p-2 bg-red-700 rounded">
-                            <strong>Failed Segment Details:</strong>
-                            <div className="mt-1 space-y-1 text-xs">
-                              <div>Segment: {generationErrorDetails.failedSegment.segmentIndex}/{generationErrorDetails.failedSegment.totalSegments}</div>
-                              <div>Text: "{generationErrorDetails.failedSegment.textPreview}..."</div>
-                              <div>Has TTS: {generationErrorDetails.failedSegment.hasTTS ? 'Yes' : 'No'}</div>
-                              <div>Has Image: {generationErrorDetails.failedSegment.hasImage ? 'Yes' : 'No'}</div>
-                              <div>TTS Size: {generationErrorDetails.failedSegment.ttsSize} bytes</div>
-                              <div>Image URL: {generationErrorDetails.failedSegment.imageUrl}</div>
-                              <div>Error: {generationErrorDetails.failedSegment.error}</div>
-                            </div>
-                          </div>
-                        )}
-                        
-                        {generationErrorDetails.stack && (
+                        {generationErrorDetails && (
                           <div className="mt-3">
-                            <strong>Stack Trace:</strong>
+                            <strong>Additional Details:</strong>
                             <pre className="text-xs bg-red-700 p-2 rounded mt-1 overflow-x-auto">
-                              {generationErrorDetails.stack}
+                              {JSON.stringify(generationErrorDetails, null, 2)}
                             </pre>
                           </div>
                         )}

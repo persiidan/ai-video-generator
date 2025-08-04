@@ -89,9 +89,10 @@ export default function VideoPreview({ segments, onDownload }: VideoPreviewProps
   };
 
   const getVideoFormat = (segment: VideoSegment) => {
-    if (!segment.dimensions) return 'Unknown';
-    const { width, height } = segment.dimensions;
-    return `${width}x${height} (${segment.isPortrait ? 'Portrait' : 'Landscape'})`;
+    // Determine format based on image URL or default to landscape
+    const isPortrait = segment.imageUrl.includes('social_story_9_16');
+    const dimensions = isPortrait ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 };
+    return `${dimensions.width}x${dimensions.height} (${isPortrait ? 'Portrait' : 'Landscape'})`;
   };
 
   return (
@@ -116,7 +117,7 @@ export default function VideoPreview({ segments, onDownload }: VideoPreviewProps
                   alt={`Segment ${index + 1}`}
                   className="w-full h-32 object-cover"
                   style={{
-                    aspectRatio: segment.isPortrait ? '9/16' : '16/9'
+                    aspectRatio: segment.imageUrl.includes('social_story_9_16') ? '9/16' : '16/9'
                   }}
                   onLoad={(e) => handleImageLoad(segment.id, e)}
                 />
@@ -138,11 +139,9 @@ export default function VideoPreview({ segments, onDownload }: VideoPreviewProps
               </p>
               
               {/* Video Format Info */}
-              {segment.dimensions && (
-                <p className="text-xs text-gray-400">
-                  Format: {getVideoFormat(segment)}
-                </p>
-              )}
+              <p className="text-xs text-gray-400">
+                Format: {getVideoFormat(segment)}
+              </p>
             </div>
           </div>
         ))}
@@ -165,7 +164,7 @@ export default function VideoPreview({ segments, onDownload }: VideoPreviewProps
                   controls
                   className="w-full rounded-lg"
                   style={{
-                    aspectRatio: selectedSegment.isPortrait ? '9/16' : '16/9',
+                    aspectRatio: selectedSegment.imageUrl.includes('social_story_9_16') ? '9/16' : '16/9',
                     objectFit: 'cover'
                   }}
                 >
@@ -183,14 +182,33 @@ export default function VideoPreview({ segments, onDownload }: VideoPreviewProps
             <div className="space-y-4">
               <div>
                 <h4 className="font-semibold text-white mb-2">Segment Information</h4>
-                <div className="space-y-2 text-sm text-gray-300">
-                  <p><strong>Duration:</strong> {formatDuration(selectedSegment.duration)}</p>
-                  <p><strong>Text:</strong> {selectedSegment.text}</p>
-                  {selectedSegment.dimensions && (
-                    <p><strong>Format:</strong> {getVideoFormat(selectedSegment)}</p>
+                <div className="bg-gray-800 p-3 rounded space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Duration:</span>
+                    <span className="text-white">{formatDuration(selectedSegment.duration)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Audio Size:</span>
+                    <span className="text-white">{(selectedSegment.audioBlob.size / 1024).toFixed(1)} KB</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Start Time:</span>
+                    <span className="text-white">{selectedSegment.startTime.toFixed(2)}s</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">End Time:</span>
+                    <span className="text-white">{selectedSegment.endTime.toFixed(2)}s</span>
+                  </div>
+                  {selectedSegment.videoBlob && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-300">Video Size:</span>
+                      <span className="text-white">{(selectedSegment.videoBlob.size / 1024 / 1024).toFixed(2)} MB</span>
+                    </div>
                   )}
-                  <p><strong>Start Time:</strong> {formatDuration(selectedSegment.startTime)}</p>
-                  <p><strong>End Time:</strong> {formatDuration(selectedSegment.endTime)}</p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Format:</span>
+                    <span className="text-white">{getVideoFormat(selectedSegment)}</span>
+                  </div>
                 </div>
               </div>
 
