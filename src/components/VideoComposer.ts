@@ -779,73 +779,85 @@ export class VideoComposer {
       console.log(`📝 Chunk ${index + 1}: "${chunk.text}" (${chunk.startTime}s - ${chunk.endTime}s)`);
     });
     
-    // FFmpeg.wasm requires a font file - let's load one
-    console.log('🎬 Loading font file for FFmpeg.wasm');
+    // Try to load the selected font, but fallback gracefully
+    let fontLoaded = false;
+    let fontFileName = '';
     
-    try {
-      // Load selected font file into FFmpeg filesystem
-      const fontFileName = selectedFont ? `${selectedFont}.ttf` : 'Poppins-Regular.ttf';
-      const fontPath = `/fonts/${fontFileName}`;
-      await this.ffmpeg!.writeFile(fontFileName, await fetchFile(fontPath));
-      console.log(`✅ Font file loaded successfully: ${fontFileName}`);
-      
-      // Create multiple drawtext filters with timing constraints
-      const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
-        // Write text to a file to avoid escaping issues
-        const textFileName = `text_${Date.now()}_${index}.txt`;
-        await this.ffmpeg!.writeFile(textFileName, chunk.text);
+    if (selectedFont) {
+      try {
+        console.log('🎬 Attempting to load custom font:', selectedFont);
+        fontFileName = `${selectedFont}.ttf`;
         
-        // Adjust font size and positioning based on video orientation
-        let fontSize, yPosition;
-        if (dimensions.height > dimensions.width) {
-          // Portrait: smaller font, positioned higher for better spacing
-          fontSize = 72;
-          yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
-        } else {
-          // Landscape: larger font, centered
-          fontSize = 110;
-          yPosition = (dimensions.height - 110) / 2;
+        // Try multiple paths for the font
+        const fontPaths = [
+          `/fonts/${fontFileName}`,
+          `http://localhost:3000/fonts/${fontFileName}`,
+          `https://localhost:3000/fonts/${fontFileName}`
+        ];
+        
+        for (const fontPath of fontPaths) {
+          try {
+            console.log(`🎬 Trying font path: ${fontPath}`);
+            const fontResponse = await fetch(fontPath);
+            if (fontResponse.ok) {
+              const fontArrayBuffer = await fontResponse.arrayBuffer();
+              await this.ffmpeg!.writeFile(fontFileName, new Uint8Array(fontArrayBuffer));
+              console.log(`✅ Custom font loaded successfully: ${fontFileName}`);
+              fontLoaded = true;
+              break;
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to load font from ${fontPath}:`, error);
+          }
         }
         
-        return `drawtext=fontfile=/${fontFileName}:textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
-      }));
-      
-      // Join all filters with commas
-      const combinedFilter = drawtextFilters.join(',');
-      
-      console.log(`🎬 Created ${drawtextFilters.length} timed drawtext filters`);
-      console.log(`🎬 Combined filter: ${combinedFilter}`);
-      
-      return combinedFilter;
-    } catch (error) {
-      console.error('❌ Failed to load font file:', error);
-      
-      // Fallback: Create timed filters without custom font
-      const fallbackFilters = await Promise.all(chunks.map(async (chunk, index) => {
-        // Write text to a file to avoid escaping issues
-        const textFileName = `fallback_text_${Date.now()}_${index}.txt`;
-        await this.ffmpeg!.writeFile(textFileName, chunk.text);
-        
-        // Adjust font size and positioning based on video orientation
-        let fontSize, yPosition;
-        if (dimensions.height > dimensions.width) {
-          // Portrait: smaller font, positioned higher for better spacing
-          fontSize = 60;
-          yPosition = (dimensions.height * 0.25) - 30; // 25% from top, centered
-        } else {
-          // Landscape: larger font, centered
-          fontSize = 90;
-          yPosition = (dimensions.height - 90) / 2;
+        if (!fontLoaded) {
+          console.warn(`⚠️ All font paths failed, using fallback`);
         }
-        
-        return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
-      }));
-      
-      const fallbackFilter = fallbackFilters.join(',');
-      console.log(`🎬 Using fallback timed filters: ${fallbackFilter}`);
-      
-      return fallbackFilter;
+      } catch (error) {
+        console.warn('⚠️ Failed to load custom font, using fallback:', error);
+      }
     }
+    
+    // If custom font failed, use a simple approach without custom font
+    if (!fontLoaded) {
+      console.log('🎬 Using fallback font approach');
+    }
+    
+    // Create multiple drawtext filters with timing constraints
+    const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
+      // Write text to a file to avoid escaping issues
+      const textFileName = `text_${Date.now()}_${index}.txt`;
+      await this.ffmpeg!.writeFile(textFileName, chunk.text);
+      
+      // Adjust font size and positioning based on video orientation
+      let fontSize, yPosition;
+      if (dimensions.height > dimensions.width) {
+        // Portrait: smaller font, positioned higher for better spacing
+        fontSize = 72;
+        yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
+      } else {
+        // Landscape: larger font, centered
+        fontSize = 110;
+        yPosition = (dimensions.height - 110) / 2;
+      }
+      
+      // Use different filter syntax based on font availability
+      if (fontLoaded) {
+        return `drawtext=fontfile=/${fontFileName}:textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
+      } else {
+        // Fallback: use default font with simpler syntax
+        return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
+      }
+    }));
+    
+    // Join all filters with commas
+    const combinedFilter = drawtextFilters.join(',');
+    
+    console.log(`🎬 Created ${drawtextFilters.length} timed drawtext filters`);
+    console.log(`🎬 Combined filter: ${combinedFilter}`);
+    
+    return combinedFilter;
   }
 
   /**
