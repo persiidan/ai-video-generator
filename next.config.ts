@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: '/fonts/(.*)',
+        source: '/public/fonts/(.*)',
         headers: [
           {
             key: 'Cache-Control',

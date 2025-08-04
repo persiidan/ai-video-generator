@@ -1,6 +1,7 @@
 import { ChunkData, TTSResult } from '@/types';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
+import { loadPoppinsFonts } from '@/utils/loadPoppinsFonts';
 import { fetchImageWithCache } from '@/utils/imageCache';
 
 export interface VideoSegment {
@@ -42,7 +43,7 @@ export interface ProgressCallback {
 
 export class VideoComposer {
   private segments: VideoSegment[] = [];
-  private ffmpeg: FFmpeg | null = null;
+  private ffmpeg: any | null = null; // Changed type to any as FFmpeg is now global
   private isInitialized = false;
   private onProgress?: ProgressCallback;
 
@@ -59,27 +60,25 @@ export class VideoComposer {
       this.ffmpeg = new FFmpeg();
       
       // Add progress logging for FFmpeg operations
-      this.ffmpeg.on('log', ({ message }) => {
+      this.ffmpeg.on('log', ({ message }: { message: string }) => {
         console.log('FFmpeg:', message);
       });
-
-      this.ffmpeg.on('progress', ({ progress, time }) => {
-        // FFmpeg progress is between 0 and 1
-        this.onProgress?.('processing', progress * 100);
+      
+      this.ffmpeg.on('progress', ({ progress, time }: { progress: number; time: number }) => {
+        console.log('FFmpeg Progress:', Math.round(progress * 100), '%', 'Time:', time, 's');
       });
       
-      this.onProgress?.('initializing', 0);
-      
-      // Load ffmpeg.wasm with simple initialization
       console.log('🔄 Loading FFmpeg.wasm...');
       await this.ffmpeg.load();
+      console.log('✅ FFmpeg.wasm loaded successfully');
+      
+      // Load Poppins fonts into FFmpeg
+      await loadPoppinsFonts(this.ffmpeg);
       
       this.isInitialized = true;
-      this.onProgress?.('ready', 100);
-      console.log('✅ FFmpeg.wasm loaded successfully');
     } catch (error) {
       console.error('❌ Failed to initialize FFmpeg:', error);
-      throw new Error('Video composition requires FFmpeg.wasm');
+      throw error;
     }
   }
 
@@ -157,21 +156,9 @@ export class VideoComposer {
   /**
    * Wait for FFmpeg to be ready
    */
-  async waitForFFmpeg(): Promise<void> {
-    let attempts = 0;
-    const maxAttempts = 100; // 10 seconds max wait
-    
-    while (!this.isInitialized && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      attempts++;
-      
-      if (attempts % 10 === 0) {
-        this.onProgress?.('initializing', (attempts / maxAttempts) * 50);
-      }
-    }
-    
-    if (!this.isInitialized || !this.ffmpeg) {
-      throw new Error('FFmpeg failed to initialize within 10 seconds');
+  public async waitForFFmpeg(): Promise<void> {
+    if (!this.isInitialized) {
+      await this.initializeFFmpeg();
     }
   }
 
@@ -407,17 +394,6 @@ export class VideoComposer {
         
         try {
           await this.createVideoSegmentWithCaptions(segment, segmentFileName, isPortrait, dimensions, ttsResult);
-          
-          // Verify the segment file was created
-          try {
-            const segmentData = await this.ffmpeg!.readFile(segmentFileName);
-            const size = typeof segmentData === 'string' ? segmentData.length : segmentData.byteLength;
-            console.log(`✅ Verified segment file created: ${segmentFileName} (${(size / 1024).toFixed(1)} KB)`);
-          } catch (verifyError) {
-            console.error(`❌ Segment file verification failed: ${segmentFileName}`, verifyError);
-            throw new Error(`Segment file was not created properly: ${segmentFileName}`);
-          }
-          
           segmentFiles.push(segmentFileName);
           totalDuration += segment.duration;
           
@@ -742,7 +718,7 @@ export class VideoComposer {
       // List files to debug
       try {
         const files = await this.ffmpeg!.listDir('/');
-        console.log('📁 Files in FFmpeg filesystem after video creation:', files.map(f => f.name));
+        console.log('📁 Files in FFmpeg filesystem after video creation:', files.map((f: any) => f.name));
       } catch (error) {
         console.log('⚠️ Could not list files for debugging');
       }
@@ -779,34 +755,42 @@ export class VideoComposer {
       console.log(`📝 Chunk ${index + 1}: "${chunk.text}" (${chunk.startTime}s - ${chunk.endTime}s)`);
     });
     
-    // Use a simple approach with basic text overlay
-    console.log('🎬 Using basic text overlay without complex drawtext filters');
+    // Use the loaded Poppins fonts
+    console.log('🎬 Using loaded Poppins fonts for text overlay');
     
-    // For now, let's create a simple text overlay that appears for the entire duration
-    // This avoids the complex timing issues with drawtext filters
-    const textFileName = `simple_text_${Date.now()}.txt`;
-    const fullText = chunks.map(chunk => chunk.text).join(' ');
-    await this.ffmpeg!.writeFile(textFileName, fullText);
+    // Determine which font to use - use lowercase filenames to match FFmpeg expectations
+    const fontFileName = selectedFont ? `${selectedFont.toLowerCase()}.ttf` : 'poppins-regular.ttf';
+    console.log(`🎬 Using font: ${fontFileName}`);
     
-    // Adjust font size and positioning based on video orientation
-    let fontSize, yPosition;
-    if (dimensions.height > dimensions.width) {
-      // Portrait: smaller font, positioned higher for better spacing
-      fontSize = 72;
-      yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
-    } else {
-      // Landscape: larger font, centered
-      fontSize = 110;
-      yPosition = (dimensions.height - 110) / 2;
-    }
+    // Create multiple drawtext filters with timing constraints
+    const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
+      // Write text to a file to avoid escaping issues
+      const textFileName = `text_${Date.now()}_${index}.txt`;
+      await this.ffmpeg!.writeFile(textFileName, chunk.text);
+      
+      // Adjust font size and positioning based on video orientation
+      let fontSize, yPosition;
+      if (dimensions.height > dimensions.width) {
+        // Portrait: smaller font, positioned higher for better spacing
+        fontSize = 72;
+        yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
+      } else {
+        // Landscape: larger font, centered
+        fontSize = 110;
+        yPosition = (dimensions.height - 110) / 2;
+      }
+      
+      // Use the loaded font file
+      return `drawtext=fontfile=${fontFileName}:textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
+    }));
     
-    // Use a simple drawtext filter that appears for the entire video duration
-    const simpleFilter = `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}`;
+    // Join all filters with commas
+    const combinedFilter = drawtextFilters.join(',');
     
-    console.log(`🎬 Created simple text overlay filter`);
-    console.log(`🎬 Filter: ${simpleFilter}`);
+    console.log(`🎬 Created ${drawtextFilters.length} timed drawtext filters`);
+    console.log(`🎬 Combined filter: ${combinedFilter}`);
     
-    return simpleFilter;
+    return combinedFilter;
   }
 
   /**
@@ -860,37 +844,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   }
 
   /**
-   * Write a video segment blob to FFmpeg filesystem
+   * Concatenate multiple video segments into a single video
    */
-  async writeSegmentToFFmpeg(segmentBlob: Blob, fileName: string): Promise<void> {
-    await this.waitForFFmpeg();
-    
-    // Convert blob to array buffer
-    const arrayBuffer = await segmentBlob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-    
-    // Write to FFmpeg filesystem
-    await this.ffmpeg!.writeFile(fileName, uint8Array);
-    console.log(`✅ Wrote segment to FFmpeg: ${fileName} (${(segmentBlob.size / 1024).toFixed(1)} KB)`);
-  }
-
-  /**
-   * Concatenate all video segments into final video - ROBUST VERSION
-   */
-  async concatenateSegments(segmentFiles: string[]): Promise<Blob> {
+  public async concatenateSegments(segmentFiles: string[]): Promise<Blob> {
     await this.waitForFFmpeg();
 
     try {
       console.log('🎬 Concatenating segments...');
-      console.log('📁 Segment files to concatenate:', segmentFiles);
-      
-      // List all files in FFmpeg filesystem before concatenation
-      try {
-        const allFiles = await this.ffmpeg!.listDir('/');
-        console.log('📁 All files in FFmpeg filesystem before concatenation:', allFiles.map(f => f.name));
-      } catch (listError) {
-        console.warn('⚠️ Could not list files for debugging:', listError);
-      }
       
       // Verify all segment files exist before concatenating
       for (const segmentFile of segmentFiles) {
@@ -909,12 +869,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       console.log('📝 Concat file content:', concatContent);
       await this.ffmpeg!.writeFile('concat.txt', concatContent);
 
-      // Use robust concatenation approach with copy mode for speed
+      // Use robust concatenation approach
       const ffmpegArgs = [
         '-f', 'concat',
         '-safe', '0',
         '-i', 'concat.txt',
-        '-c', 'copy', // Use copy mode instead of re-encoding
+        '-c:v', 'libx264',
+        '-preset', 'veryfast', // Changed from 'fast' to 'veryfast' for speed
+        '-crf', '30', // Changed from 25 to 30 for faster encoding
+        '-c:a', 'aac',
+        '-b:a', '96k', // Reduced from 128k to 96k for faster encoding
+        '-r', '30',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
         '-y', 'final_video.mp4'
       ];
 
@@ -925,14 +892,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       console.log('🔄 FFmpeg concatenation started... (this may take a while)');
       await execPromise;
       console.log('✅ FFmpeg concatenation completed successfully');
-
-      // List files after concatenation to see what was created
-      try {
-        const filesAfter = await this.ffmpeg!.listDir('/');
-        console.log('📁 Files in FFmpeg filesystem after concatenation:', filesAfter.map(f => f.name));
-      } catch (listError) {
-        console.warn('⚠️ Could not list files after concatenation:', listError);
-      }
 
       // Read the final video
       const videoData = await this.ffmpeg!.readFile('final_video.mp4');
@@ -1014,5 +973,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       console.error('❌ Alternative concatenation failed:', error);
       throw error;
     }
+  }
+
+  /**
+   * Write a segment blob to FFmpeg's virtual filesystem
+   */
+  public async writeSegmentToFFmpeg(segmentBlob: Blob, fileName: string): Promise<void> {
+    const arrayBuffer = await segmentBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    await this.ffmpeg!.writeFile(fileName, uint8Array);
+    console.log(`✅ Wrote segment to FFmpeg: ${fileName} (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)`);
   }
 }
