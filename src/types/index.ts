@@ -5,6 +5,8 @@ export type ImageStyle = 'realistic' | 'cartoon';
 // Simplified to only the two main options we need
 export type AspectRatio = 'widescreen_16_9' | 'social_story_9_16';
 
+export type FontType = 'poppins-regular' | 'poppins-medium' | 'poppins-semibold' | 'poppins-bold';
+
 export type GenerationMode = 'full-video' | 'image-captions';
 
 export interface GenerationConfig {

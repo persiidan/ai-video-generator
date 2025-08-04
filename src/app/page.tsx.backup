@@ -28,7 +28,6 @@ export default function Home() {
   const [generationError, setGenerationError] = useState<string>('');
   const [generationErrorDetails, setGenerationErrorDetails] = useState<any>(null);
   const [isVoiceValid, setIsVoiceValid] = useState(false);
-  const [finalVideo, setFinalVideo] = useState<{ blob: Blob; url: string; size: number; duration: number } | null>(null);
   
   // Create logger for this component
   const logger: Logger = createLogger('HomePage');
@@ -74,7 +73,6 @@ export default function Home() {
     setTtsResults([]);
     setImageResults([]);
     setVideoSegments([]);
-    setFinalVideo(null); // Reset final video state
 
     try {
       // Step 1: Split script into chunks
@@ -283,72 +281,10 @@ export default function Home() {
       }
 
       setVideoSegments(segments);
+      setGenerationStep('Generation complete!');
       
       const successfulSegments = segments.filter(seg => seg.videoBlob).length;
       const totalSize = segments.reduce((total, seg) => total + (seg.videoBlob?.size || 0), 0);
-      
-      // Create full video from segments if we have multiple segments
-      if (segments.length > 1) {
-        setGenerationStep('Concatenating segments into final video...');
-        
-        try {
-          logger.info('Starting video concatenation', 'Generation', {
-            totalSegments: segments.length,
-            totalSizeMB: `${(totalSize / 1024 / 1024).toFixed(2)} MB`
-          });
-          
-          // Create a new VideoComposer instance for concatenation
-          const finalVideoComposer = new VideoComposer();
-          
-          // Initialize FFmpeg for concatenation
-          await finalVideoComposer.waitForFFmpeg();
-          
-          // Get the individual segment file names that were created
-          const segmentFileNames = segments.map((_, index) => `segment_${index}.mp4`);
-          
-          // Write the existing segment blobs to FFmpeg filesystem
-          for (let i = 0; i < segments.length; i++) {
-            const segment = segments[i];
-            const fileName = segmentFileNames[i];
-            
-            if (segment.videoBlob) {
-              await finalVideoComposer.writeSegmentToFFmpeg(segment.videoBlob, fileName);
-            }
-          }
-          
-          // Concatenate the existing segment files
-          const finalVideoBlob = await finalVideoComposer.concatenateSegments(segmentFileNames);
-          const finalVideoUrl = URL.createObjectURL(finalVideoBlob);
-          
-          // Calculate total duration
-          const totalDuration = segments.reduce((total, seg) => total + seg.duration, 0);
-          
-          // Set the final video
-          setFinalVideo({
-            blob: finalVideoBlob,
-            url: finalVideoUrl,
-            size: finalVideoBlob.size,
-            duration: totalDuration
-          });
-          
-          logger.info('✅ Full video created successfully', 'Generation', {
-            finalVideoSize: `${(finalVideoBlob.size / 1024 / 1024).toFixed(2)} MB`,
-            totalDuration: totalDuration,
-            segmentCount: segments.length
-          });
-          
-        } catch (concatenationError) {
-          logger.error('❌ Video concatenation failed', 'Generation', {
-            error: concatenationError instanceof Error ? concatenationError.message : String(concatenationError),
-            totalSegments: segments.length
-          }, concatenationError instanceof Error ? concatenationError : new Error(String(concatenationError)));
-          
-          // Don't fail the entire process, just log the error
-          console.error('Video concatenation failed:', concatenationError);
-        }
-      }
-      
-      setGenerationStep('Generation complete!');
       
       logger.info('✅ All video segments created successfully', 'Generation', {
         totalSegments: segments.length,
@@ -399,9 +335,9 @@ export default function Home() {
   const canGenerate = script.trim() && !isOverLimit && !validationError && isVoiceValid && !isGenerating;
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-black via-black to-purple-900 p-4">
+    <main className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 p-4">
       <div className="max-w-4xl mx-auto">
-        <div className="bg-gray-900 rounded-xl shadow-lg p-6 md:p-8 border border-purple-700">
+        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 border border-gray-700">
           <h1 className="text-3xl font-bold text-white mb-2 text-center">
             AI Video Generator
           </h1>
@@ -419,8 +355,8 @@ export default function Home() {
               value={script}
               onChange={(e) => handleScriptChange(e.target.value)}
               placeholder="Enter your script here... (e.g., 'Welcome to our amazing product! This revolutionary tool will transform how you work. Join thousands of satisfied customers who have already discovered the power of innovation.')"
-              className={`w-full h-32 p-4 border rounded-lg resize-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-gray-800 text-white placeholder-gray-400 ${
-                isOverLimit ? 'border-red-400 bg-red-900' : 'border-purple-600'
+              className={`w-full h-32 p-4 border rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-700 text-white placeholder-gray-400 ${
+                isOverLimit ? 'border-red-400 bg-red-900' : 'border-gray-600'
               }`}
               maxLength={1200}
             />
@@ -435,22 +371,29 @@ export default function Home() {
           </div>
 
           {/* Voice, Style, Aspect Ratio, and Font Selectors */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
-            <div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div className="lg:col-span-1">
               <label className="block text-sm font-medium text-gray-200 mb-2">
                 Image Style
               </label>
               <select
                 value={imageStyle}
                 onChange={(e) => setImageStyle(e.target.value as ImageStyle)}
-                className="w-full p-3 border border-purple-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-gray-800 text-white"
+                className="w-full p-3 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-700 text-white"
               >
                 <option value="realistic">Realistic</option>
                 <option value="cartoon">Cartoon</option>
               </select>
             </div>
 
-            <div>
+            <div className="lg:col-span-2">
+              <AspectRatioSelector
+                selectedAspectRatio={aspectRatio}
+                onAspectRatioChange={setAspectRatio}
+              />
+            </div>
+
+            <div className="lg:col-span-1">
               <VoiceSelector
                 selectedVoice={selectedVoiceName}
                 onVoiceChange={setSelectedVoiceName}
@@ -458,20 +401,12 @@ export default function Home() {
               />
             </div>
 
-            <div>
+            <div className="lg:col-span-1">
               <FontSelector
                 selectedFont={selectedFont}
                 onFontChange={setSelectedFont}
               />
             </div>
-          </div>
-
-          {/* Aspect Ratio Selector - Below the other controls */}
-          <div className="mb-6">
-            <AspectRatioSelector
-              selectedAspectRatio={aspectRatio}
-              onAspectRatioChange={setAspectRatio}
-            />
           </div>
 
           </div>
@@ -481,7 +416,7 @@ export default function Home() {
             <button
               onClick={handleStartGeneration}
               disabled={!canGenerate}
-              className="px-8 py-4 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors"
+              className="px-8 py-4 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors"
             >
               {isGenerating ? 'Generating...' : 'Start Generation'}
             </button>
@@ -489,8 +424,8 @@ export default function Home() {
 
           {/* Generation Status */}
           {isGenerating && (
-            <div className="mt-4 p-4 bg-purple-900 border border-purple-600 rounded-lg">
-              <p className="text-purple-200 text-center">{generationStep}</p>
+            <div className="mt-4 p-4 bg-blue-900 border border-blue-600 rounded-lg">
+              <p className="text-blue-200 text-center">{generationStep}</p>
             </div>
           )}
 
@@ -611,35 +546,22 @@ export default function Home() {
             </div>
           )}
 
-          {/* Final Video Display */}
-          {finalVideo && (
-            <div className="mt-8 p-4 bg-gray-900 border border-purple-700 rounded-lg">
-              <h3 className="font-medium text-white mb-2">Final Generated Video</h3>
-              <p className="text-sm text-gray-300">
-                Your final video has been generated. You can download it below.
-              </p>
-              <div className="mt-4 flex flex-col items-center">
-                <video controls className="w-full max-w-md rounded-lg shadow-lg">
-                  <source src={finalVideo.url} type="video/mp4" />
-                  Your browser does not support the video tag.
-                </video>
-                <p className="text-sm text-gray-300 mt-2">
-                  Size: {(finalVideo.size / 1024 / 1024).toFixed(2)} MB
-                </p>
-                <p className="text-sm text-gray-300">
-                  Duration: {finalVideo.duration} seconds
-                </p>
-                <a
-                  href={finalVideo.url}
-                  download={`ai_video_${new Date().toISOString().slice(0, 10)}.mp4`}
-                  className="mt-4 px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition-colors"
-                >
-                  Download Video
-                </a>
-              </div>
-            </div>
-          )}
+          {/* API Keys Notice */}
+          <div className="mt-8 p-4 bg-yellow-900 border border-yellow-700 rounded-lg">
+            <h3 className="font-medium text-yellow-200 mb-2">Required API Keys</h3>
+            <p className="text-sm text-yellow-300">
+              To use this application, you'll need to configure API keys for:
+            </p>
+            <ul className="text-sm text-yellow-300 mt-2 list-disc list-inside">
+              <li>Google Cloud Text-to-Speech API (Stage 2 - Working)</li>
+              <li>Freepik Image Generation API (Stage 3 - Updated with new parameters)</li>
+            </ul>
+            <p className="text-sm text-yellow-300 mt-2">
+              Add your Freepik API key to <code className="bg-gray-800 px-1 rounded">.env.local</code> as <code className="bg-gray-800 px-1 rounded">NEXT_PUBLIC_FREEPIK_API_KEY</code>
+            </p>
+          </div>
         </div>
+      </div>
     </main>
   );
 }

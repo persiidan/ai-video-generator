@@ -54,11 +54,11 @@ export async function generateTTS(
     // Convert base64 audio to blob
     const audioBlob = await base64ToBlob(data.audioContent, 'audio/mp3');
     
-    // Parse word timestamps (approximate since we don't get word-level timestamps)
-    const wordTimestamps = parseWordTimestamps([], chunk.text);
+    // Calculate actual audio duration first
+    const duration = await calculateAudioDuration(audioBlob);
     
-    // Calculate duration (approximate based on word count and speaking rate)
-    const duration = calculateDuration(wordTimestamps);
+    // Parse word timestamps with actual duration for better synchronization
+    const wordTimestamps = parseWordTimestamps([], chunk.text, duration);
 
     return {
       id: `tts-${Date.now()}-${Math.random()}`,
@@ -101,25 +101,60 @@ export async function generateTTS(
 
 function parseWordTimestamps(
   timepoints: Array<{ markName: string; timeSeconds: string }>,
-  text: string
+  text: string,
+  actualDuration?: number
 ): WordTimestamp[] {
   const words = text.split(/\s+/);
   const timestamps: WordTimestamp[] = [];
   
   // If no timepoints, create approximate timestamps
   if (timepoints.length === 0) {
-    const wordsPerSecond = 2.5; // Approximate speaking rate
+    // More accurate timing based on actual speaking patterns
+    const averageWordsPerSecond = 2.3; // More realistic rate
+    const totalWords = words.length;
+    const estimatedTotalDuration = totalWords / averageWordsPerSecond;
+    
     let currentTime = 0;
     
     words.forEach((word, index) => {
-      const wordDuration = word.length * 0.1; // Rough estimate
+      // More sophisticated word duration calculation
+      const wordLength = word.length;
+      const isShortWord = wordLength <= 3;
+      const isLongWord = wordLength >= 8;
+      
+      let wordDuration;
+      if (isShortWord) {
+        wordDuration = 0.15; // Short words (the, and, of)
+      } else if (isLongWord) {
+        wordDuration = 0.35; // Long words (beautiful, wonderful)
+      } else {
+        wordDuration = 0.25; // Medium words
+      }
+      
+      // Add natural pauses
+      const pauseAfter = index < words.length - 1 ? 0.08 : 0;
+      
       timestamps.push({
         word: word.trim(),
         startTime: currentTime,
         endTime: currentTime + wordDuration
       });
-      currentTime += wordDuration + 0.05; // Small pause between words
+      
+      currentTime += wordDuration + pauseAfter;
     });
+    
+    // If we have actual duration, scale the timestamps to match
+    if (actualDuration && actualDuration > 0) {
+      const calculatedDuration = timestamps.length > 0 ? timestamps[timestamps.length - 1].endTime : 0;
+      if (calculatedDuration > 0) {
+        const scaleFactor = actualDuration / calculatedDuration;
+        timestamps.forEach(timestamp => {
+          timestamp.startTime *= scaleFactor;
+          timestamp.endTime *= scaleFactor;
+        });
+        console.log(`📝 Scaled timestamps by factor ${scaleFactor.toFixed(3)} to match actual duration ${actualDuration}s`);
+      }
+    }
     
     return timestamps;
   }
@@ -152,6 +187,28 @@ function parseWordTimestamps(
   });
 
   return timestamps;
+}
+
+async function calculateAudioDuration(audioBlob: Blob): Promise<number> {
+  return new Promise((resolve) => {
+    const audio = new Audio();
+    const url = URL.createObjectURL(audioBlob);
+    
+    audio.addEventListener('loadedmetadata', () => {
+      const duration = audio.duration;
+      URL.revokeObjectURL(url);
+      console.log(`📝 Actual audio duration: ${duration}s`);
+      resolve(duration);
+    });
+    
+    audio.addEventListener('error', () => {
+      console.warn('⚠️ Could not calculate audio duration, using fallback');
+      URL.revokeObjectURL(url);
+      resolve(0); // Will use calculated duration instead
+    });
+    
+    audio.src = url;
+  });
 }
 
 function calculateDuration(wordTimestamps: WordTimestamp[]): number {

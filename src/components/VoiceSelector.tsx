@@ -63,9 +63,14 @@ export default function VoiceSelector({ selectedVoice, onVoiceChange, onValidati
   };
 
   const formatVoiceName = (voice: GoogleVoice): string => {
-    const type = getVoiceType(voice.name);
+    // Extract the actual voice name from the full name
+    // Example: "en-US-Standard-A" -> "Standard A"
+    const nameParts = voice.name.split('-');
+    const voiceType = nameParts[nameParts.length - 2]; // "Standard" or "Chirp3-HD"
+    const voiceLetter = nameParts[nameParts.length - 1]; // "A", "B", "C", etc.
+    
     const gender = voice.ssmlGender === 'MALE' ? 'Male' : 'Female';
-    return `${type} ${gender}`;
+    return `${voiceType} ${voiceLetter} (${gender})`;
   };
 
   const getVoiceType = (voiceName: string): string => {
@@ -139,7 +144,7 @@ export default function VoiceSelector({ selectedVoice, onVoiceChange, onValidati
       <select
         value={selectedVoice}
         onChange={(e) => onVoiceChange(e.target.value)}
-        className="w-full p-3 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-700 text-white"
+        className="w-full p-3 border border-purple-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-gray-800 text-white"
       >
         <option value="">Select a voice...</option>
         {voices.map((voice) => (

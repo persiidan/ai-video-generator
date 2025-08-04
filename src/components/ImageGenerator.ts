@@ -125,14 +125,9 @@ export async function generateImagesForChunks(
     } catch (error) {
       console.error(`❌ Failed to generate image for chunk ${i + 1}:`, error);
       
-      // Create a placeholder result for failed generations
-      results.push({
-        id: `img-${i}-error-${Date.now()}`,
-        imageUrl: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMzc0MTUxIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2YzZjRmNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIEdlbmVyYXRpb24gRmFpbGVkPC90ZXh0Pjwvc3ZnPg==',
-        prompt: `Failed to generate image for: ${chunks[i].text}`,
-        style: style,
-        chunkText: chunks[i].text
-      });
+      // Don't create SVG fallbacks - let the error propagate
+      // This prevents FFmpeg infinite loops with SVG images
+      throw new Error(`Image generation failed for chunk ${i + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

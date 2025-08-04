@@ -11,8 +11,48 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Image URL is required' }, { status: 400 });
     }
 
-    // Validate URL format
-    if (typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
+    // Validate URL format - accept both HTTP URLs and data URLs
+    if (typeof imageUrl !== 'string') {
+      return NextResponse.json({ 
+        error: `Invalid image URL format for ${purpose}: ${imageUrl}` 
+      }, { status: 400 });
+    }
+
+    // Handle data URLs (base64 encoded images)
+    if (imageUrl.startsWith('data:')) {
+      try {
+        // Extract the base64 data from the data URL
+        const matches = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!matches) {
+          return NextResponse.json({ 
+            error: `Invalid data URL format for ${purpose}: ${imageUrl}` 
+          }, { status: 400 });
+        }
+
+        const [, contentType, base64Data] = matches;
+        
+        // Decode base64 to get the binary data
+        const binaryData = Buffer.from(base64Data, 'base64');
+        
+        console.log(`✅ Data URL processed successfully for ${purpose}:`, contentType, binaryData.length, 'bytes');
+
+        return NextResponse.json({
+          success: true,
+          imageData: base64Data, // Return the base64 data as-is
+          contentType,
+          size: binaryData.length
+        });
+      } catch (error: any) {
+        console.error(`❌ Error processing data URL for ${purpose}:`, error);
+        return NextResponse.json(
+          { error: `Failed to process data URL for ${purpose}: ${error.message}` },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Handle HTTP URLs
+    if (!imageUrl.startsWith('http')) {
       return NextResponse.json({ 
         error: `Invalid image URL format for ${purpose}: ${imageUrl}` 
       }, { status: 400 });

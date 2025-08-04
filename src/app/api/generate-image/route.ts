@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { freepikClient } from '@/utils/api';
+import { freepikClient, apiRequest } from '@/utils/api';
 import { AspectRatio } from '@/types';
 
 export interface GenerateImageRequest {
@@ -16,6 +16,65 @@ export interface GenerateImageResponse {
   chunkText: string;
 }
 
+// Helper function to poll Imagen3 task status
+async function pollImagen3Task(taskId: string, maxAttempts: number = 30): Promise<any> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`🎨 Polling Imagen3 task ${taskId}, attempt ${attempt}/${maxAttempts}`);
+      
+      const response = await apiRequest(
+        () => freepikClient.get(`/ai/text-to-image/imagen3/${taskId}`),
+        'Failed to get task status'
+      ) as any;
+      
+      console.log('🎨 Task status response:', JSON.stringify(response.data, null, 2));
+      
+      // The status is in response.data.data.status (nested structure)
+      const taskData = response.data?.data;
+      if (!taskData) {
+        console.error('❌ No task data found in response');
+        throw new Error('Invalid response structure - no task data');
+      }
+      
+      // Check for different possible status field names in the nested data
+      const status = taskData.status || taskData.task_status || taskData.state;
+      console.log(`🎨 Detected status: ${status}`);
+      
+      if (status === 'COMPLETED' || status === 'completed') {
+        console.log('✅ Task completed successfully!');
+        return taskData; // Return the nested task data
+      } else if (status === 'FAILED' || status === 'failed') {
+        throw new Error(`Imagen3 task failed: ${taskData.error || 'Unknown error'}`);
+      } else if (status === 'IN_PROGRESS' || status === 'in_progress' || status === 'processing') {
+        console.log('🔄 Task in progress, waiting...');
+        // Wait 2 seconds before next poll
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      } else if (status === 'CREATED' || status === 'created') {
+        console.log('⏳ Task still in created status, waiting...');
+        // Wait 2 seconds before next poll
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      } else {
+        console.log(`❓ Unknown status: ${status}, treating as in progress...`);
+        // Wait 2 seconds before next poll
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+    } catch (error: any) {
+      console.error(`❌ Error polling attempt ${attempt}:`, error.message);
+      
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+  
+  throw new Error('Task polling timeout - image generation took too long');
+}
+
 export async function POST(request: Request) {
   try {
     const body: GenerateImageRequest = await request.json();
@@ -30,29 +89,38 @@ export async function POST(request: Request) {
     const prompt = createImagePrompt(body.text, body.style, body.aspectRatio);
     console.log('🎨 Generated prompt:', prompt);
 
-    // Step 1: Submit the generation request
-    const response = await freepikClient.post('/ai/text-to-image/flux-dev', {
+    // Use Google Imagen 3 API with minimal required parameters
+    const requestBody = {
       prompt: prompt,
-      aspect_ratio: body.aspectRatio
-    });
+      num_images: 1,
+      aspect_ratio: mapAspectRatio(body.aspectRatio)
+    };
 
-    console.log('🎨 Freepik initial response:', JSON.stringify(response.data, null, 2));
+    console.log('🎨 Sending Imagen3 API request:', requestBody);
 
-    // Check if we got a task_id (asynchronous workflow)
-    const apiResponse = response.data;
-    if (apiResponse && apiResponse.data && apiResponse.data.task_id) {
-      const taskId = apiResponse.data.task_id;
-      console.log('🎨 Task created with ID:', taskId);
+    // Step 1: Create the Imagen3 task
+    const response = await apiRequest(
+      () => freepikClient.post('/ai/text-to-image/imagen3', requestBody),
+      'Image generation failed'
+    ) as any;
+
+    console.log('🎨 Freepik Imagen3 initial response:', response);
+
+    // Handle Imagen3 API response structure
+    let taskId: string;
+    
+    if (response.data && response.data.task_id) {
+      // Direct task_id in response
+      taskId = response.data.task_id;
+      console.log('🎨 Imagen3 task created with ID:', taskId);
+    } else if (response.data && response.data.data && response.data.data.task_id) {
+      // Nested task_id in response (this is what we're getting)
+      taskId = response.data.data.task_id;
+      console.log('🎨 Imagen3 task created with ID (nested):', taskId);
+    } else if (response.data && response.data.images && response.data.images.length > 0) {
+      // Fallback to direct image response (if API returns images directly)
+      const imageUrl = response.data.images[0].url;
       
-      // Step 2: Poll the task status until completion
-      let imageUrl = await pollTaskStatus(taskId);
-      
-      if (!imageUrl) {
-        throw new Error('Image generation failed: Task completed but no image URL found');
-      }
-
-      console.log('✅ Successfully generated image URL:', imageUrl);
-
       const result: GenerateImageResponse = {
         id: `img-${Date.now()}`,
         imageUrl: imageUrl,
@@ -60,119 +128,104 @@ export async function POST(request: Request) {
         style: body.style,
         chunkText: body.text
       };
-
       return NextResponse.json(result);
     } else {
-      // Handle synchronous response (if any)
-      throw new Error('Invalid response structure from Freepik API: No task_id received');
+      console.error('❌ Unexpected response structure:', response.data);
+      throw new Error('Invalid response structure from Freepik Imagen3 API');
     }
+
+    // Step 2: Poll for the task completion
+    const taskResult = await pollImagen3Task(taskId);
+    console.log('🎨 Imagen3 task completed:', taskResult);
+    
+    // Extract the generated image URL with better debugging
+    console.log('🔍 Extracting image URL from task result...');
+    console.log('🔍 Task result structure:', JSON.stringify(taskResult, null, 2));
+    
+    let imageUrl: string;
+    
+    // Try different possible locations for the image URL
+    // The generated array is directly in taskResult (not nested)
+    if (taskResult.generated && Array.isArray(taskResult.generated) && taskResult.generated.length > 0) {
+      const firstGenerated = taskResult.generated[0];
+      imageUrl = typeof firstGenerated === 'string' ? firstGenerated : firstGenerated.url;
+      console.log('✅ Found image URL in taskResult.generated:', imageUrl);
+    } else if (taskResult.images && Array.isArray(taskResult.images) && taskResult.images.length > 0) {
+      imageUrl = taskResult.images[0].url;
+      console.log('✅ Found image URL in taskResult.images:', imageUrl);
+    } else if (taskResult.data && taskResult.data.images && Array.isArray(taskResult.data.images) && taskResult.data.images.length > 0) {
+      imageUrl = taskResult.data.images[0].url;
+      console.log('✅ Found image URL in taskResult.data.images:', imageUrl);
+    } else if (taskResult.data && taskResult.data.generated && Array.isArray(taskResult.data.generated) && taskResult.data.generated.length > 0) {
+      const firstGenerated = taskResult.data.generated[0];
+      imageUrl = typeof firstGenerated === 'string' ? firstGenerated : firstGenerated.url;
+      console.log('✅ Found image URL in taskResult.data.generated:', imageUrl);
+    } else if (taskResult.url) {
+      imageUrl = taskResult.url;
+      console.log('✅ Found image URL in taskResult.url:', imageUrl);
+    } else if (taskResult.data && taskResult.data.url) {
+      imageUrl = taskResult.data.url;
+      console.log('✅ Found image URL in taskResult.data.url:', imageUrl);
+    } else {
+      console.error('❌ No image URL found in task result. Available keys:', Object.keys(taskResult));
+      if (taskResult.data) {
+        console.error('❌ taskResult.data keys:', Object.keys(taskResult.data));
+      }
+      throw new Error('No generated images found in task result');
+    }
+
+    if (!imageUrl) {
+      throw new Error('Image URL is empty or undefined');
+    }
+
+    console.log('🎯 Final image URL:', imageUrl);
+
+    const result: GenerateImageResponse = {
+      id: taskId,
+      imageUrl: imageUrl,
+      prompt: prompt,
+      style: body.style,
+      chunkText: body.text
+    };
+
+    return NextResponse.json(result);
 
   } catch (error: any) {
     console.error('❌ Server-side image generation failed:', error);
     
-    // Enhanced error logging
+    // Log the detailed error information for debugging
     if (error.response?.data) {
-      console.error('❌ API Error details:', {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data,
-        headers: error.response.headers
-      });
-    }
-    
-    // Check for specific error types
-    let errorMessage = error.message || 'Unknown error';
-    let statusCode = 500;
-    
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      errorMessage = 'Authentication failed. Please check your Freepik API key.';
-      statusCode = 401;
-    } else if (error.response?.status === 404) {
-      errorMessage = 'Freepik API endpoint not found. The API might be in beta or the endpoint has changed.';
-      statusCode = 404;
-    } else if (error.response?.status === 429) {
-      errorMessage = 'Rate limit exceeded. Please try again later.';
-      statusCode = 429;
+      console.error('❌ Validation error details:', JSON.stringify(error.response.data, null, 2));
+      
+      // Log the specific invalid parameters if available
+      if (error.response.data.invalid_params) {
+        console.error('❌ Invalid parameters:', JSON.stringify(error.response.data.invalid_params, null, 2));
+      }
     }
     
     return NextResponse.json(
       {
         error: 'Image generation failed',
-        message: errorMessage,
-        details: error.response?.data || error.request || error,
-        status: error.response?.status
+        message: error.message || 'Unknown error',
+        details: error.response?.data || error.request || error
       },
-      { status: statusCode }
+      { status: 500 }
     );
   }
 }
 
 /**
- * Poll the task status until completion
+ * Map aspect ratios to Imagen3 API format
  */
-async function pollTaskStatus(taskId: string): Promise<string | null> {
-  const maxAttempts = 30; // 30 seconds max
-  const pollInterval = 1000; // 1 second
-  
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      console.log(`🔄 Polling task status (attempt ${attempt + 1}/${maxAttempts})...`);
-      
-      const statusResponse = await freepikClient.get(`/ai/text-to-image/flux-dev/${taskId}`);
-      const statusData = statusResponse.data;
-      
-      console.log('📊 Task status response:', JSON.stringify(statusData, null, 2));
-      
-      if (statusData && statusData.data) {
-        const taskData = statusData.data;
-        
-        if (taskData.status === 'COMPLETED') {
-          // Task completed, extract image URL
-          if (taskData.generated && Array.isArray(taskData.generated) && taskData.generated.length > 0) {
-            const imageData = taskData.generated[0];
-            // Handle both string URLs and object URLs
-            if (typeof imageData === 'string') {
-              // URL is directly a string in the array
-              return imageData;
-            } else if (imageData && typeof imageData === 'object' && imageData.url) {
-              // URL is in an object with url property
-              return imageData.url;
-            }
-          }
-          // If no URL found in generated array, try other possible locations
-          if (taskData.url) {
-            return taskData.url;
-          }
-          if (taskData.data && taskData.data.url) {
-            return taskData.data.url;
-          }
-          console.error('❌ Task completed but no image URL found in response');
-          return null;
-        } else if (taskData.status === 'FAILED') {
-          throw new Error(`Image generation failed: ${taskData.error || 'Unknown error'}`);
-        } else if (taskData.status === 'CREATED' || taskData.status === 'IN_PROGRESS') {
-          // Task is still processing, wait and try again
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-          continue;
-        } else {
-          console.log(`⏳ Task status: ${taskData.status}, waiting...`);
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-          continue;
-        }
-      } else {
-        console.error('❌ Invalid task status response structure');
-        return null;
-      }
-    } catch (error: any) {
-      console.error(`❌ Error polling task status (attempt ${attempt + 1}):`, error.message);
-      if (attempt === maxAttempts - 1) {
-        throw new Error(`Failed to poll task status after ${maxAttempts} attempts: ${error.message}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-    }
+function mapAspectRatio(aspectRatio: AspectRatio): string {
+  switch (aspectRatio) {
+    case 'widescreen_16_9':
+      return 'widescreen_16_9';
+    case 'social_story_9_16':
+      return 'social_story_9_16';
+    default:
+      return 'square_1_1'; // Default to square for Imagen3
   }
-  
-  throw new Error(`Task did not complete within ${maxAttempts} seconds`);
 }
 
 /**

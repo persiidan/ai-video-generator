@@ -16,24 +16,51 @@ export async function GET() {
 
     console.log('🔑 Testing Freepik API with key:', apiKey.substring(0, 10) + '...');
 
-    // Try different authentication methods based on the documentation
+    // Try different APIs and authentication methods
     const testRequests = [
-      // Method 1: Using x-freepik-api-key header (official method from docs)
+      // Method 1: Flux-dev API (original test)
       () => freepikClient.post('/ai/text-to-image/flux-dev', {
         prompt: 'A simple test image',
         aspect_ratio: 'widescreen_16_9'
       }),
-      // Method 2: Using x-freepik-api-key header with axios
-      () => axios.post('https://api.freepik.com/v1/ai/text-to-image/flux-dev', {
+      // Method 2: Google Imagen 3 API test
+      () => freepikClient.post('/ai/text-to-image/imagen3', {
         prompt: 'A simple test image',
-        aspect_ratio: 'social_story_9_16'
+        num_images: 1,
+        aspect_ratio: 'square_1_1',
+        styling: {
+          style: 'realistic',
+          effects: {
+            color: 'natural',
+            lightning: 'natural',
+            framing: 'portrait'
+          }
+        },
+        person_generation: 'allow_adult',
+        safety_settings: 'block_low_and_above'
+      }),
+      // Method 3: Using axios with Imagen 3
+      () => axios.post('https://api.freepik.com/v1/ai/text-to-image/imagen3', {
+        prompt: 'A simple test image',
+        num_images: 1,
+        aspect_ratio: 'square_1_1',
+        styling: {
+          style: 'anime',
+          effects: {
+            color: 'vibrant',
+            lightning: 'warm',
+            framing: 'portrait'
+          }
+        },
+        person_generation: 'allow_adult',
+        safety_settings: 'block_low_and_above'
       }, {
         headers: {
           'x-freepik-api-key': apiKey,
           'Content-Type': 'application/json'
         }
       }),
-      // Method 3: Using Authorization header (fallback)
+      // Method 4: Using Authorization header (fallback)
       () => axios.post('https://api.freepik.com/v1/ai/text-to-image/flux-dev', {
         prompt: 'A simple test image',
         aspect_ratio: 'widescreen_16_9'
@@ -46,43 +73,57 @@ export async function GET() {
     ];
 
     let lastError = null;
+    const results = [];
     
     for (let i = 0; i < testRequests.length; i++) {
       try {
         console.log(`🔄 Testing method ${i + 1}...`);
         const response = await testRequests[i]();
         
-        // Enhanced response analysis
-        const responseAnalysis = {
-          hasData: !!response.data,
-          dataKeys: response.data ? Object.keys(response.data) : [],
-          dataType: typeof response.data,
-          fullResponse: response.data,
-          status: response.status,
-          headers: response.headers
-        };
+        const methodName = i === 0 ? 'Flux-dev API' : 
+                          i === 1 ? 'Google Imagen 3 API' :
+                          i === 2 ? 'Google Imagen 3 API (axios)' :
+                          'Flux-dev API (Bearer)';
         
-        console.log('📊 Response analysis:', responseAnalysis);
-        
-        return NextResponse.json({
-          success: true,
-          message: `Freepik API connection successful with method ${i + 1}`,
-          apiKeyConfigured: true,
-          apiKey: apiKey.substring(0, 10) + '...',
+        results.push({
           method: i + 1,
-          response: response.data,
-          analysis: responseAnalysis
+          name: methodName,
+          success: true,
+          response: response.data
         });
+        
+        console.log(`✅ ${methodName} successful`);
       } catch (error: any) {
         console.log(`❌ Method ${i + 1} failed:`, error.message, `(${error.response?.status})`);
-        console.log('❌ Error details:', {
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data,
-          message: error.message
-        });
         lastError = error;
+        
+        const methodName = i === 0 ? 'Flux-dev API' : 
+                          i === 1 ? 'Google Imagen 3 API' :
+                          i === 2 ? 'Google Imagen 3 API (axios)' :
+                          'Flux-dev API (Bearer)';
+        
+        results.push({
+          method: i + 1,
+          name: methodName,
+          success: false,
+          error: error.message,
+          status: error.response?.status
+        });
       }
+    }
+
+    // Return results for all methods
+    const successfulMethods = results.filter(r => r.success);
+    
+    if (successfulMethods.length > 0) {
+      return NextResponse.json({
+        success: true,
+        message: `${successfulMethods.length} API method(s) working`,
+        apiKeyConfigured: true,
+        apiKey: apiKey.substring(0, 10) + '...',
+        workingMethods: successfulMethods,
+        allResults: results
+      });
     }
 
     // If all methods failed, return the last error
@@ -92,7 +133,7 @@ export async function GET() {
     console.error('Freepik API test error:', error);
     
     // Check if it's a 404 error (endpoint not found)
-    if (error.response?.status === 404) {
+    if (error.status === 404) {
       return NextResponse.json({
         success: false,
         error: 'API endpoint not found',
@@ -114,7 +155,7 @@ export async function GET() {
     }
     
     // Check if it's an authentication error
-    if (error.response?.status === 401 || error.response?.status === 403) {
+    if (error.status === 401 || error.status === 403) {
       return NextResponse.json({
         success: false,
         error: 'Authentication failed',
@@ -141,14 +182,8 @@ export async function GET() {
       error: error.message || 'Unknown error',
       apiKeyConfigured: !!process.env.NEXT_PUBLIC_FREEPIK_API_KEY,
       message: 'Failed to connect to Freepik API',
-      status: error.response?.status || 'unknown',
-      apiKey: process.env.NEXT_PUBLIC_FREEPIK_API_KEY ? process.env.NEXT_PUBLIC_FREEPIK_API_KEY.substring(0, 10) + '...' : 'Not configured',
-      errorDetails: {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data
-      }
+      status: error.status || 'unknown',
+      apiKey: process.env.NEXT_PUBLIC_FREEPIK_API_KEY ? process.env.NEXT_PUBLIC_FREEPIK_API_KEY.substring(0, 10) + '...' : 'Not configured'
     }, { status: 500 });
   }
 } 

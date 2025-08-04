@@ -155,9 +155,9 @@ export class VideoComposer {
   }
 
   /**
-   * Wait for FFmpeg to be ready with better error handling
+   * Wait for FFmpeg to be ready
    */
-  private async waitForFFmpeg(): Promise<void> {
+  async waitForFFmpeg(): Promise<void> {
     let attempts = 0;
     const maxAttempts = 100; // 10 seconds max wait
     
@@ -241,17 +241,33 @@ export class VideoComposer {
   private createThreeWordChunks(wordTimestamps: WordTimestamp[]): ThreeWordChunk[] {
     const chunks: ThreeWordChunk[] = [];
     
+    // Calculate the total actual duration from the last word's end time
+    const totalDuration = wordTimestamps.length > 0 
+      ? wordTimestamps[wordTimestamps.length - 1].endTime 
+      : 0;
+    
+    console.log(`📝 Total calculated duration from timestamps: ${totalDuration}s`);
+    console.log(`📝 Number of words: ${wordTimestamps.length}`);
+    
     for (let i = 0; i < wordTimestamps.length; i += 3) {
       const wordGroup = wordTimestamps.slice(i, i + 3);
       const text = wordGroup.map(w => w.word).join(' ');
+      
+      // Use the first word's start time and last word's end time
       const startTime = wordGroup[0].startTime;
       const endTime = wordGroup[wordGroup.length - 1].endTime;
       
+      // Use exact timing without overlap buffers
+      const adjustedStartTime = startTime;
+      const adjustedEndTime = endTime;
+      
       chunks.push({
         text,
-        startTime,
-        endTime
+        startTime: adjustedStartTime,
+        endTime: adjustedEndTime
       });
+      
+      console.log(`📝 Chunk ${chunks.length}: "${text}" (${adjustedStartTime}s - ${adjustedEndTime}s)`);
     }
     
     console.log(`📝 Created ${chunks.length} three-word chunks from ${wordTimestamps.length} words`);
@@ -391,6 +407,17 @@ export class VideoComposer {
         
         try {
           await this.createVideoSegmentWithCaptions(segment, segmentFileName, isPortrait, dimensions, ttsResult);
+          
+          // Verify the segment file was created
+          try {
+            const segmentData = await this.ffmpeg!.readFile(segmentFileName);
+            const size = typeof segmentData === 'string' ? segmentData.length : segmentData.byteLength;
+            console.log(`✅ Verified segment file created: ${segmentFileName} (${(size / 1024).toFixed(1)} KB)`);
+          } catch (verifyError) {
+            console.error(`❌ Segment file verification failed: ${segmentFileName}`, verifyError);
+            throw new Error(`Segment file was not created properly: ${segmentFileName}`);
+          }
+          
           segmentFiles.push(segmentFileName);
           totalDuration += segment.duration;
           
@@ -451,7 +478,7 @@ export class VideoComposer {
   /**
    * Generate individual video segment with captions
    */
-  async generateIndividualSegment(segment: VideoSegment, ttsResult: TTSResult): Promise<VideoSegment> {
+  async generateIndividualSegment(segment: VideoSegment, ttsResult: TTSResult, selectedFont?: string): Promise<VideoSegment> {
     try {
       // Wait for FFmpeg to be initialized
       await this.waitForFFmpeg();
@@ -469,7 +496,7 @@ export class VideoComposer {
       console.log(`📐 Segment dimensions: ${dimensions.width}x${dimensions.height} (${isPortrait ? 'portrait' : 'landscape'})`);
 
       // Create video segment with captions
-      await this.createVideoSegmentWithCaptions(segment, segmentFileName, isPortrait, dimensions, ttsResult);
+      await this.createVideoSegmentWithCaptions(segment, segmentFileName, isPortrait, dimensions, ttsResult, selectedFont);
 
       // Read the generated video
       const videoData = await this.ffmpeg!.readFile(segmentFileName);
@@ -503,6 +530,10 @@ export class VideoComposer {
   ): Promise<void> {
     await this.waitForFFmpeg();
 
+    // Define file names outside try block for cleanup
+    const imageFileName = `image_${outputFileName.replace('.mp4', '.jpg')}`;
+    const audioFileName = `audio_${outputFileName.replace('.mp4', '.mp3')}`;
+
     try {
       console.log(`🎬 Creating segment: ${outputFileName} (${dimensions.width}x${dimensions.height})`);
       console.log(`🖼️ Image URL: ${segment.imageUrl} (isPortrait: ${isPortrait})`);
@@ -511,9 +542,6 @@ export class VideoComposer {
       const imageBlob = await fetchImageWithCache(segment.imageUrl, 'video creation');
       
       // Write files to FFmpeg - use unique names to avoid conflicts
-      const imageFileName = `image_${outputFileName.replace('.mp4', '.jpg')}`;
-      const audioFileName = `audio_${outputFileName.replace('.mp4', '.mp3')}`;
-      
       await this.ffmpeg!.writeFile(imageFileName, await fetchFile(imageBlob));
       await this.ffmpeg!.writeFile(audioFileName, await fetchFile(segment.audioBlob));
 
@@ -533,10 +561,10 @@ export class VideoComposer {
         '-i', imageFileName,
         '-i', audioFileName,
         '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '25',
+        '-preset', 'veryfast', // Changed from 'fast' to 'veryfast' for speed
+        '-crf', '30', // Changed from 25 to 30 for faster encoding
         '-c:a', 'aac',
-        '-b:a', '128k',
+        '-b:a', '96k', // Reduced from 128k to 96k for faster encoding
         '-pix_fmt', 'yuv420p',
         '-r', '30',
         '-ar', '44100',
@@ -549,7 +577,11 @@ export class VideoComposer {
       ];
 
       // Create video from image with audio
-      await this.ffmpeg!.exec(ffmpegArgs);
+      const execPromise = this.ffmpeg!.exec(ffmpegArgs);
+      
+      console.log('🔄 FFmpeg processing started... (this may take a while)');
+      await execPromise;
+      console.log('✅ FFmpeg processing completed successfully');
 
       // Verify the segment was created
       const segmentData = await this.ffmpeg!.readFile(outputFileName);
@@ -562,6 +594,15 @@ export class VideoComposer {
       
     } catch (error) {
       console.error(`❌ Failed to create segment ${outputFileName}:`, error);
+      
+      // Clean up any files that might have been created
+      try {
+        await this.ffmpeg!.deleteFile(imageFileName);
+        await this.ffmpeg!.deleteFile(audioFileName);
+      } catch (cleanupError) {
+        console.warn('⚠️ Cleanup failed:', cleanupError);
+      }
+      
       throw error;
     }
   }
@@ -574,7 +615,8 @@ export class VideoComposer {
     outputFileName: string, 
     isPortrait: boolean,
     dimensions: { width: number; height: number },
-    ttsResult: TTSResult
+    ttsResult: TTSResult,
+    selectedFont?: string
   ): Promise<void> {
     await this.waitForFFmpeg();
 
@@ -586,17 +628,15 @@ export class VideoComposer {
       const imageBlob = await fetchImageWithCache(segment.imageUrl, 'video creation');
       
       // Use unique file names to avoid conflicts
-      const imageFileName = `image_${outputFileName.replace('.mp4', '.jpg')}`;
-      const audioFileName = `audio_${outputFileName.replace('.mp4', '.mp3')}`;
+      const timestamp = Date.now();
+      const randomId = Math.random().toString(36).substring(2, 15);
+      const imageFileName = `image_${timestamp}_${randomId}.jpg`;
+      const audioFileName = `audio_${timestamp}_${randomId}.mp3`;
       
       // Write image and audio files to FFmpeg
       await this.ffmpeg!.writeFile(imageFileName, await fetchFile(imageBlob));
       await this.ffmpeg!.writeFile(audioFileName, await fetchFile(segment.audioBlob));
 
-      // Create 3-word chunks from word timestamps
-      const threeWordChunks = this.createThreeWordChunks(ttsResult.wordTimestamps);
-      console.log(`📝 Processing ${threeWordChunks.length} three-word chunks for timing`);
-      
       // FIXED: Build proper video filter with scaling AND captions
       let baseVideoFilter: string;
       if (isPortrait) {
@@ -607,26 +647,72 @@ export class VideoComposer {
         baseVideoFilter = `scale=1920:1080`;
       }
 
-      // Build timed text filter using FFmpeg drawtext
-      const textFilter = this.buildTimedTextFilter(threeWordChunks, dimensions);
+      // Create 3-word chunks from word timestamps
+      console.log(`🔍 TTS Result word timestamps:`, ttsResult.wordTimestamps);
+      console.log(`🔍 TTS Result word timestamps length:`, ttsResult.wordTimestamps.length);
       
-      // Combine scaling and text filters
-      const combinedFilter = `${baseVideoFilter},${textFilter}`;
+      if (ttsResult.wordTimestamps.length === 0) {
+        console.warn('⚠️ No word timestamps available, creating fallback captions');
+        // Create fallback captions without timing
+        const fallbackChunks = [{
+          text: segment.text,
+          startTime: 0,
+          endTime: segment.duration
+        }];
+        const textFilter = await this.buildTimedTextFilter(fallbackChunks, dimensions);
+        const combinedFilter = `${baseVideoFilter},${textFilter}`;
+        
+        const ffmpegArgs = [
+          '-loop', '1',
+          '-i', imageFileName,
+          '-i', audioFileName,
+          '-vf', combinedFilter,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          '-crf', '25',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-pix_fmt', 'yuv420p',
+          '-r', '30',
+          '-ar', '44100',
+          '-ac', '2',
+          '-s', `${dimensions.width}x${dimensions.height}`,
+          '-shortest',
+          '-t', segment.duration.toString(),
+          '-y', outputFileName
+        ];
 
+        console.log(`🎬 Creating video with fallback captions`);
+        console.log(`🎬 FFmpeg command: ${ffmpegArgs.join(' ')}`);
+        
+        await this.ffmpeg!.exec(ffmpegArgs);
+        return;
+      }
+      
+      const threeWordChunks = this.createThreeWordChunks(ttsResult.wordTimestamps);
+      console.log(`📝 Processing ${threeWordChunks.length} three-word chunks for timing`);
+      console.log(`📝 Three-word chunks:`, threeWordChunks);
+      
+      // Build timed text filter using simplified approach
+      const textFilter = await this.buildTimedTextFilter(threeWordChunks, dimensions, selectedFont);
+      
+      // Use simple filter chain for FFmpeg.wasm compatibility
+      const combinedFilter = `${baseVideoFilter},${textFilter}`;
+      
       const ffmpegArgs = [
         '-loop', '1',
         '-i', imageFileName,
         '-i', audioFileName,
+        '-vf', combinedFilter,
         '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '25',
+        '-preset', 'veryfast', // Changed from 'fast' to 'veryfast' for speed
+        '-crf', '30', // Changed from 25 to 30 for faster encoding (slightly lower quality but much faster)
         '-c:a', 'aac',
-        '-b:a', '128k',
+        '-b:a', '96k', // Reduced from 128k to 96k for faster encoding
         '-pix_fmt', 'yuv420p',
         '-r', '30',
         '-ar', '44100',
         '-ac', '2',
-        '-vf', combinedFilter,
         '-s', `${dimensions.width}x${dimensions.height}`,
         '-shortest',
         '-t', segment.duration.toString(),
@@ -637,7 +723,11 @@ export class VideoComposer {
       console.log(`🎬 FFmpeg command: ${ffmpegArgs.join(' ')}`);
       
       // Create video from image with audio and captions
-      await this.ffmpeg!.exec(ffmpegArgs);
+      const execPromise = this.ffmpeg!.exec(ffmpegArgs);
+      
+      console.log('🔄 FFmpeg processing started... (this may take a while)');
+      await execPromise;
+      console.log('✅ FFmpeg processing completed successfully');
 
       // Verify the segment was created
       const segmentData = await this.ffmpeg!.readFile(outputFileName);
@@ -678,45 +768,168 @@ export class VideoComposer {
     }
   }
 
-  /**
-   * Build FFmpeg drawtext filter for timed 3-word captions (FIXED)
+    /**
+   * Build simple text overlay (FFmpeg.wasm compatible without fonts)
    */
-  private buildTimedTextFilter(chunks: ThreeWordChunk[], dimensions: { width: number; height: number }): string {
-    // Calculate responsive font size
-    const fontSize = Math.max(Math.min(dimensions.width, dimensions.height) * 0.06, 48);
+  private async buildTimedTextFilter(chunks: ThreeWordChunk[], dimensions: { width: number; height: number }, selectedFont?: string): Promise<string> {
+    console.log('🎬 Building timed text filter with synchronization');
     
-    // Position text in center of screen
-    const x = dimensions.width / 2;
-    const y = dimensions.height / 2;
-    
-    // Create drawtext filters for each chunk with timing
-    const textFilters = chunks.map((chunk, index) => {
-      // Escape text for FFmpeg - IMPORTANT: proper escaping for drawtext
-      const escapedText = chunk.text
-        .replace(/\\/g, '\\\\')  // Escape backslashes first
-        .replace(/'/g, "\\'")    // Escape single quotes
-        .replace(/:/g, "\\:")    // Escape colons
-        .replace(/\[/g, "\\[")   // Escape square brackets
-        .replace(/\]/g, "\\]")   // Escape square brackets
-        .replace(/,/g, "\\,");   // Escape commas
-      
-      return `drawtext=text='${escapedText}':fontcolor=white:fontsize=${fontSize}:` +
-             `x=(w-text_w)/2:y=(h-text_h)/2:` +
-             `enable='between(t,${chunk.startTime},${chunk.endTime})':` +
-             `borderw=3:bordercolor=black:fontweight=bold`;
+    console.log(`📝 Processing ${chunks.length} chunks for timing synchronization`);
+    chunks.forEach((chunk, index) => {
+      console.log(`📝 Chunk ${index + 1}: "${chunk.text}" (${chunk.startTime}s - ${chunk.endTime}s)`);
     });
     
-    return textFilters.join(',');
+    // FFmpeg.wasm requires a font file - let's load one
+    console.log('🎬 Loading font file for FFmpeg.wasm');
+    
+    try {
+      // Load selected font file into FFmpeg filesystem
+      const fontFileName = selectedFont ? `${selectedFont}.ttf` : 'Poppins-Regular.ttf';
+      const fontPath = `/fonts/${fontFileName}`;
+      await this.ffmpeg!.writeFile(fontFileName, await fetchFile(fontPath));
+      console.log(`✅ Font file loaded successfully: ${fontFileName}`);
+      
+      // Create multiple drawtext filters with timing constraints
+      const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
+        // Write text to a file to avoid escaping issues
+        const textFileName = `text_${Date.now()}_${index}.txt`;
+        await this.ffmpeg!.writeFile(textFileName, chunk.text);
+        
+        // Adjust font size and positioning based on video orientation
+        let fontSize, yPosition;
+        if (dimensions.height > dimensions.width) {
+          // Portrait: smaller font, positioned higher for better spacing
+          fontSize = 72;
+          yPosition = (dimensions.height * 0.25) - 36; // 25% from top, centered
+        } else {
+          // Landscape: larger font, centered
+          fontSize = 110;
+          yPosition = (dimensions.height - 110) / 2;
+        }
+        
+        return `drawtext=fontfile=/${fontFileName}:textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
+      }));
+      
+      // Join all filters with commas
+      const combinedFilter = drawtextFilters.join(',');
+      
+      console.log(`🎬 Created ${drawtextFilters.length} timed drawtext filters`);
+      console.log(`🎬 Combined filter: ${combinedFilter}`);
+      
+      return combinedFilter;
+    } catch (error) {
+      console.error('❌ Failed to load font file:', error);
+      
+      // Fallback: Create timed filters without custom font
+      const fallbackFilters = await Promise.all(chunks.map(async (chunk, index) => {
+        // Write text to a file to avoid escaping issues
+        const textFileName = `fallback_text_${Date.now()}_${index}.txt`;
+        await this.ffmpeg!.writeFile(textFileName, chunk.text);
+        
+        // Adjust font size and positioning based on video orientation
+        let fontSize, yPosition;
+        if (dimensions.height > dimensions.width) {
+          // Portrait: smaller font, positioned higher for better spacing
+          fontSize = 60;
+          yPosition = (dimensions.height * 0.25) - 30; // 25% from top, centered
+        } else {
+          // Landscape: larger font, centered
+          fontSize = 90;
+          yPosition = (dimensions.height - 90) / 2;
+        }
+        
+        return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
+      }));
+      
+      const fallbackFilter = fallbackFilters.join(',');
+      console.log(`🎬 Using fallback timed filters: ${fallbackFilter}`);
+      
+      return fallbackFilter;
+    }
+  }
+
+  /**
+   * Create ASS subtitle content for the captions
+   */
+  private createASSSubtitles(chunks: ThreeWordChunk[], dimensions: { width: number; height: number }): string {
+    const fontSize = Math.max(Math.min(dimensions.width, dimensions.height) * 0.04, 32);
+    
+    let assContent = `[Script Info]
+Title: AI Video Generator Captions
+ScriptType: v4.00+
+WrapStyle: 1
+ScaledBorderAndShadow: yes
+YCbCr Matrix: None
+PlayResX: ${dimensions.width}
+PlayResY: ${dimensions.height}
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,sans-serif,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,2,10,10,80,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+    chunks.forEach((chunk, index) => {
+      const startTime = this.formatTime(chunk.startTime);
+      const endTime = this.formatTime(chunk.endTime);
+      const text = chunk.text.replace(/'/g, "\\'").replace(/:/g, "\\:");
+      
+      assContent += `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${text}\n`;
+    });
+
+    console.log(`📝 Created ${chunks.length} subtitle entries`);
+    console.log(`📝 Sample subtitle: ${chunks[0]?.text || 'No text'}`);
+    console.log(`📝 Video dimensions: ${dimensions.width}x${dimensions.height}`);
+
+    return assContent;
+  }
+
+  /**
+   * Format time in ASS format (H:MM:SS.cc)
+   */
+  private formatTime(seconds: number): string {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const centiseconds = Math.floor((seconds % 1) * 100);
+    
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
+  }
+
+  /**
+   * Write a video segment blob to FFmpeg filesystem
+   */
+  async writeSegmentToFFmpeg(segmentBlob: Blob, fileName: string): Promise<void> {
+    await this.waitForFFmpeg();
+    
+    // Convert blob to array buffer
+    const arrayBuffer = await segmentBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    // Write to FFmpeg filesystem
+    await this.ffmpeg!.writeFile(fileName, uint8Array);
+    console.log(`✅ Wrote segment to FFmpeg: ${fileName} (${(segmentBlob.size / 1024).toFixed(1)} KB)`);
   }
 
   /**
    * Concatenate all video segments into final video - ROBUST VERSION
    */
-  private async concatenateSegments(segmentFiles: string[]): Promise<Blob> {
+  async concatenateSegments(segmentFiles: string[]): Promise<Blob> {
     await this.waitForFFmpeg();
 
     try {
       console.log('🎬 Concatenating segments...');
+      console.log('📁 Segment files to concatenate:', segmentFiles);
+      
+      // List all files in FFmpeg filesystem before concatenation
+      try {
+        const allFiles = await this.ffmpeg!.listDir('/');
+        console.log('📁 All files in FFmpeg filesystem before concatenation:', allFiles.map(f => f.name));
+      } catch (listError) {
+        console.warn('⚠️ Could not list files for debugging:', listError);
+      }
       
       // Verify all segment files exist before concatenating
       for (const segmentFile of segmentFiles) {
@@ -735,24 +948,30 @@ export class VideoComposer {
       console.log('📝 Concat file content:', concatContent);
       await this.ffmpeg!.writeFile('concat.txt', concatContent);
 
-      // Use robust concatenation approach
+      // Use robust concatenation approach with copy mode for speed
       const ffmpegArgs = [
         '-f', 'concat',
         '-safe', '0',
         '-i', 'concat.txt',
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '25',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-r', '30',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
+        '-c', 'copy', // Use copy mode instead of re-encoding
         '-y', 'final_video.mp4'
       ];
 
       console.log('🎬 FFmpeg concat command:', ffmpegArgs.join(' '));
-      await this.ffmpeg!.exec(ffmpegArgs);
+      
+      const execPromise = this.ffmpeg!.exec(ffmpegArgs);
+      
+      console.log('🔄 FFmpeg concatenation started... (this may take a while)');
+      await execPromise;
+      console.log('✅ FFmpeg concatenation completed successfully');
+
+      // List files after concatenation to see what was created
+      try {
+        const filesAfter = await this.ffmpeg!.listDir('/');
+        console.log('📁 Files in FFmpeg filesystem after concatenation:', filesAfter.map(f => f.name));
+      } catch (listError) {
+        console.warn('⚠️ Could not list files after concatenation:', listError);
+      }
 
       // Read the final video
       const videoData = await this.ffmpeg!.readFile('final_video.mp4');
@@ -816,7 +1035,12 @@ export class VideoComposer {
       ];
 
       console.log('🎬 Alt FFmpeg command:', ffmpegArgs.join(' '));
-      await this.ffmpeg!.exec(ffmpegArgs);
+      
+      const execPromise = this.ffmpeg!.exec(ffmpegArgs);
+      
+      console.log('🔄 FFmpeg alternative concatenation started... (this may take a while)');
+      await execPromise;
+      console.log('✅ FFmpeg alternative concatenation completed successfully');
 
       const videoData = await this.ffmpeg!.readFile('final_video_alt.mp4');
       const videoBlob = new Blob([videoData], { type: 'video/mp4' });
