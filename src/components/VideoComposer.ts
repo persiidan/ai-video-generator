@@ -779,50 +779,8 @@ export class VideoComposer {
       console.log(`📝 Chunk ${index + 1}: "${chunk.text}" (${chunk.startTime}s - ${chunk.endTime}s)`);
     });
     
-    // Try to load the selected font, but fallback gracefully
-    let fontLoaded = false;
-    let fontFileName = '';
-    
-    if (selectedFont) {
-      try {
-        console.log('🎬 Attempting to load custom font:', selectedFont);
-        fontFileName = `${selectedFont}.ttf`;
-        
-        // Try multiple paths for the font
-        const fontPaths = [
-          `/fonts/${fontFileName}`,
-          `http://localhost:3000/fonts/${fontFileName}`,
-          `https://localhost:3000/fonts/${fontFileName}`
-        ];
-        
-        for (const fontPath of fontPaths) {
-          try {
-            console.log(`🎬 Trying font path: ${fontPath}`);
-            const fontResponse = await fetch(fontPath);
-            if (fontResponse.ok) {
-              const fontArrayBuffer = await fontResponse.arrayBuffer();
-              await this.ffmpeg!.writeFile(fontFileName, new Uint8Array(fontArrayBuffer));
-              console.log(`✅ Custom font loaded successfully: ${fontFileName}`);
-              fontLoaded = true;
-              break;
-            }
-          } catch (error) {
-            console.warn(`⚠️ Failed to load font from ${fontPath}:`, error);
-          }
-        }
-        
-        if (!fontLoaded) {
-          console.warn(`⚠️ All font paths failed, using fallback`);
-        }
-      } catch (error) {
-        console.warn('⚠️ Failed to load custom font, using fallback:', error);
-      }
-    }
-    
-    // If custom font failed, use a simple approach without custom font
-    if (!fontLoaded) {
-      console.log('🎬 Using fallback font approach');
-    }
+    // Use a simple approach without custom fonts to avoid FFmpeg crashes
+    console.log('🎬 Using basic drawtext filter without custom fonts');
     
     // Create multiple drawtext filters with timing constraints
     const drawtextFilters = await Promise.all(chunks.map(async (chunk, index) => {
@@ -842,13 +800,8 @@ export class VideoComposer {
         yPosition = (dimensions.height - 110) / 2;
       }
       
-      // Use different filter syntax based on font availability
-      if (fontLoaded) {
-        return `drawtext=fontfile=/${fontFileName}:textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
-      } else {
-        // Fallback: use default font with simpler syntax
-        return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
-      }
+      // Use basic drawtext filter without fontfile parameter
+      return `drawtext=textfile=${textFileName}:fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${chunk.startTime},${chunk.endTime})'`;
     }));
     
     // Join all filters with commas
